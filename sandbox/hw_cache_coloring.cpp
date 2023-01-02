@@ -82,6 +82,27 @@ struct Haswell {
     };
 };
 
+struct Skylake {
+    struct Memory {
+        struct CacheLine {
+            static constexpr size_t size = 64_B;
+            static constexpr size_t bits = log2(size);
+        };
+        struct Page {
+            static constexpr size_t size = 4_KB;
+            static constexpr size_t bits = log2(size);
+        };
+        struct Physical {
+            static constexpr size_t bits = 48;
+        };
+    };
+    struct L2 {
+        static constexpr size_t size = 1_MB;
+        static constexpr size_t ways = 16;
+        static constexpr size_t way_size = size / ways;
+    };
+};
+
 
 template<typename _T, typename _L>
 struct PageColors {
@@ -279,7 +300,7 @@ int main() {
 #if IS_ARM
     TestL2<M1> test;
 #else
-    TestL2<Haswell> test;
+    TestL2<Skylake> test;
 #endif
     test.run();
 }
