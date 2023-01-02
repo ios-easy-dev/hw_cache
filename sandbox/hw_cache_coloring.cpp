@@ -237,7 +237,7 @@ struct TestL2 {
     }
 
     size_t getGoodPage(size_t idx, size_t page_set) {
-        return (**(cmap_idx.end() - 1 - idx % page_set))[0];
+        return (**(cmap_idx.end() - 1 - (idx % page_set) % cmap_idx.size()))[(idx % page_set) / cmap_idx.size()];
     }
 
     void test_bad_mapping() {
@@ -257,7 +257,7 @@ struct TestL2 {
     }
 
     void test_mapping(auto &&getPage) {
-        for (size_t page_set = 1; page_set < test_pages; ++page_set) {
+        for (size_t page_set = test_pages - 1; page_set <= test_pages; ++page_set) {
             // page_set 1 maps same page test_pages times
             // performance drops with 9 different pages since 8 pages can fit M1 L1
             cout << "TEST " << test_pages << " WITH " << page_set << " different PAGES of same color" << endl;
