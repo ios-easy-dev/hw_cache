@@ -36,7 +36,7 @@
 
 // IS_VM - QEMU simulates 64b cache line and 4K Pages on M1
 
-#if IS_ARM && !IS_VM
+#if IS_ARM && (!defined(IS_VM) || !IS_VM)
 #define CACHE_LINE_SIZE 128
 #define PAGE_SIZE 16384
 #else

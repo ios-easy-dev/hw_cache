@@ -6,26 +6,27 @@
 #include <bitset>
 #include <iomanip>
 #include <iterator>
+#include <functional>
 
 using namespace std;
 
 // getconf -a | grep CACHE
 
 /*
-L1 DEDUCTIONS
-- 14 bits 16K page size
-- 7 bits 128B cache line size
-- 128K/16K = 8 pages in L1 - 8 WAY CACHE
-- 16K/128 = 128 sets in L1 each way
+ L1 DEDUCTIONS
+ - 14 bits 16K page size
+ - 7 bits 128B cache line size
+ - 128K/16K = 8 pages in L1 - 8 WAY CACHE
+ - 16K/128 = 128 sets in L1 each way
 
-L2 CACHE ON M1
-- 12 MB per one core
-- 12 WAY -> 1MB each way
-- 1MB/16KB = 64 PAGES/COLORS in a way
-- 7 bits inside cache line
-- 7 bits to support VIPT out of 14 bits inside cache line (intel has 6 + 6)
-- 6 bits page color
-*/
+ L2 CACHE ON M1
+ - 12 MB per one core
+ - 12 WAY -> 1MB each way
+ - 1MB/16KB = 64 PAGES/COLORS in a way
+ - 7 bits inside cache line
+ - 7 bits to support VIPT out of 14 bits inside cache line (intel has 6 + 6)
+ - 6 bits page color
+ */
 
 constexpr size_t operator"" _B(unsigned long long v) {
     return v;
@@ -103,7 +104,6 @@ struct Skylake {
     };
 };
 
-
 template<typename _T, typename _L>
 struct PageColors {
     using T = IDE_DEFAULT_TYPE(_T, M1);
@@ -151,25 +151,35 @@ struct TestL2 {
     using M = T::Memory;
     using C = PageColors<T, typename T::L2>;
     using L = T::L2;
-    vaddr_t base;
+    vaddr_t base, tailored;
     vector<PageMapEntry> base_map;
     cmap_t cmap;                // map of color to vector of pages indices
     cmap_idx_t cmap_idx;        // vector of iterators into original map sorted by pages count
     constexpr static int mmap_prot = PROT_READ | PROT_WRITE;
     constexpr static int mmap_flags = MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE;
     constexpr static size_t straddle = M::Page::size / PAGE_SIZE;
+    constexpr static size_t test_pages = L::ways + 1; // we need up to cache ways + 1 to cause saturation
     static_assert(M::Page::size % PAGE_SIZE == 0);
+
+    TestL2() {
+        tailored = mmap_aligned(test_pages);
+        cout << "tailored addr " << (void*) tailored << endl;
+    }
+
+    vaddr_t mmap_aligned(size_t pages) {
+        size_t size = M::Page::size * pages;
+        void *raw, *aligned;
+        SYS_CALL_MMAP(raw = mmap(0, size + M::Page::size, mmap_prot, mmap_flags, -1, 0), "mmap");
+        aligned = (vaddr_t) align_up(raw, M::Page::size);
+        assert(is_aligned(aligned, M::Page::size));
+        return (vaddr_t) aligned;
+    }
 
     void allocate() {
         // assert(T::Memory::CacheLine::size == getpagesize());
         size_t size = M::Page::size * population;
-        // Make note that without MAP_POPULATE physical addresses will not be available
-        void *raw;
-        SYS_CALL_MMAP(raw = mmap(0, size + M::Page::size, mmap_prot, mmap_flags, -1, 0), "mmap");
-        base = (vaddr_t) align_up(raw, M::Page::size);
-        memset(base, 113, size);
+        base = mmap_aligned(population);
         cout << "base virtual address " << (void*) base << ", size " << size << endl;
-        assert(is_aligned(base, M::Page::size));
         base_map.resize(population);
         get_physical_pages(base, &base_map[0], population, straddle);
     }
@@ -222,51 +232,60 @@ struct TestL2 {
                 << bitset<64>(uint64_t(paddr)) << " color " << C::get_page_color(paddr) << endl;
     }
 
+    size_t getBadPage(size_t idx, size_t page_set) {
+        return (*cmap_idx.back())[idx % page_set];
+    }
+
+    size_t getGoodPage(size_t idx, size_t page_set) {
+        return (**(cmap_idx.end() - 1 - idx % page_set))[0];
+    }
+
     void test_bad_mapping() {
         cout << "Pages to be used in bad way test\n"
                 << "All pages of same color and amount of pages exceeds amount of ways by 1\n"
                 << "It causes cache spill inside tight loop" << endl;
-        vaddr_t bad_mapping = nullptr;
-        const size_t test_pages = L::ways + 1;         // we need up to cache ways + 1 to cause saturation
-        size_t size = M::Page::size * test_pages;
-        void *raw;
-        SYS_CALL_MMAP(raw = mmap(0, size + M::Page::size, mmap_prot, mmap_flags, -1, 0), "mmap");
-        bad_mapping = (vaddr_t) align_up(raw, M::Page::size);
-        assert(is_aligned(bad_mapping, M::Page::size));
-        cout << "bad mapping base " << (void*) bad_mapping << endl;
+        using namespace std::placeholders;
+        test_mapping(bind(&TestL2::getBadPage, this, _1, _2));
+    }
 
+    void test_good_mapping() {
+        cout << "Pages to be used in bad way test\n"
+                << "All pages of same color and amount of pages exceeds amount of ways by 1\n"
+                << "It causes cache spill inside tight loop" << endl;
+        using namespace std::placeholders;
+        test_mapping(bind(&TestL2::getGoodPage, this, _1, _2));
+    }
+
+    void test_mapping(auto &&getPage) {
         for (size_t page_set = 1; page_set < test_pages; ++page_set) {
             // page_set 1 maps same page test_pages times
             // performance drops with 9 different pages since 8 pages can fit M1 L1
             cout << "TEST " << test_pages << " WITH " << page_set << " different PAGES of same color" << endl;
-            auto &pages = *cmap_idx.back(); // vector of pages with same color of max frequency
             for (size_t i = 0; i < test_pages; ++i) {
-                size_t page_idx = pages[i % page_set];
+                size_t page_idx = getPage(i, page_set);
                 report_page(page_idx);
-                vaddr_t vaddr, vaddr_new = bad_mapping + M::Page::size * i, vaddr_old = (vaddr_t) getVirtualAddress(page_idx);
+                vaddr_t vaddr, vaddr_new = tailored + M::Page::size * i, vaddr_old = (vaddr_t) getVirtualAddress(page_idx);
                 const int remap_flags = MREMAP_FIXED | MREMAP_MAYMOVE;
                 SYS_CALL_MMAP(vaddr = (vaddr_t ) mremap(vaddr_old, 0, M::Page::size, remap_flags, vaddr_new), "mremap");
                 SYS_CALL_CHECK(vaddr != vaddr_new, "mremap");
                 mem_load(vaddr);
             }
-            cout << "value " << (int) bad_mapping[0] << endl;
-            // now we have contiguous space and can run tight loop test
-            test_loop(bad_mapping, test_pages);
+            test_loop();
         }
     }
 
-    void test_loop(vaddr_t addr, size_t pages) {
-        size_t size = pages * M::Page::size;
-        cout << "test " << pages << " pages at " << (void*) addr << " total size " << size << endl;
-        report_physical_pages(addr, pages, C::get_page_color, straddle);
-        const size_t total_size = M::Page::size * pages;
+    void test_loop() {
+        size_t size = test_pages * M::Page::size;
+        cout << "test " << test_pages << " pages at " << (void*) tailored << " total size " << size << endl;
+        report_physical_pages(tailored, test_pages, C::get_page_color, straddle);
+        const size_t total_size = M::Page::size * test_pages;
         const size_t stride = M::CacheLine::size;
         const size_t strides = total_size / stride;
         const size_t loops = 1 << 10;
 
         auto run = [&]() {
             for (size_t i = 0; i < loops; ++i) {
-                uint8_t *p = addr;
+                uint8_t *p = tailored;
                 for (size_t j = 0; j < strides; ++j) {
                     *p = i;
                     p += stride;
@@ -293,6 +312,7 @@ struct TestL2 {
         create_index();
         dump_colors_index();
         test_bad_mapping();
+        test_good_mapping();
     }
 };
 
