@@ -1,96 +1,53 @@
 #include <compiling.h>
 #include <resources.hpp>
-#include <unordered_map>
 
 using namespace std;
 
-// getconf -a | grep CACHE
-
-/*
- L2 CACHE ON M1
- - 12 MB per one core
- - 12 WAY -> 1MB each way
- - 1MB/16KB = 64 PAGES/COLORS in a way
- - 7 bits inside cache line
- - 7 bits to support VIPT out of 14 bits inside cache line (intel has 6 + 6)
- - 6 bits page color
- */
-
-constexpr size_t operator"" _B(unsigned long long v) {
-    return v;
-}
-constexpr size_t operator"" _KB(unsigned long long v) {
-    return v * 1024;
-}
-constexpr size_t operator"" _MB(unsigned long long v) {
-    return v * 1024 * 1024;
-}
-constexpr size_t log2(size_t n) {
-    return ((n < 2) ? 0 : 1 + log2(n / 2));
-}
-
-struct M1 {
-    struct Memory {
-        struct CacheLine {
-            static constexpr size_t size = 128_B;
-            static constexpr size_t bits = log2(size);
-        };
-        struct Page {
-            static constexpr size_t size = 16_KB;
-            static constexpr size_t bits = log2(size);
-        };
-    };
-    struct L2 {
-        static constexpr size_t size = 12_MB;
-        static constexpr size_t ways = 12;
-        static constexpr size_t way_size = size / ways;
-        struct PageColor {
-            static constexpr size_t colors = L2::way_size / Memory::Page::size;
-            static constexpr size_t bits = log2(colors);
-        };
-        struct Bits {
-            static constexpr size_t offset = Memory::CacheLine::bits;
-            static constexpr size_t index = Memory::Page::bits - offset;
-            static constexpr size_t color = PageColor::bits;
-        };
-        static_assert(Bits::offset == 7);
-        static_assert(Bits::index == 7);
-        static_assert(Bits::color == 6);
-    };
-};
-
-static_assert(M1::Memory::CacheLine::size == CACHE_LINE_SIZE);
-static_assert(M1::Memory::Page::size == PAGE_SIZE);
-
-template<typename T = M1>
-struct TestL2 {
-    size_t pages = 1024 * 16;
-    using paddr_t = uint8_t*;
-    using vaddr_t = uint8_t*;
-    using page_indices_t = vector<size_t>;
-    using pmap_t = unordered_map<paddr_t, page_indices_t>;
-    vaddr_t vaddrs;
-    pmap_t pmap;
-
+struct MemTest {
+    size_t pages = 18;
+    uint8_t *addr;
     void allocate() {
-//        assert(M1:: == getpagesize());
-        vaddrs = (vaddr_t) mmap(0, T::Memory::Page::size * pages, PROT_READ | PROT_WRITE, //
-                MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, 0, 0);
+        assert(PAGE_SIZE == getpagesize());
+        addr = (uint8_t*) mmap(0, PAGE_SIZE * pages, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE/*| MAP_POPULATE*/, 0, 0);
+        memset(addr, 1, PAGE_SIZE * pages);
+        munmap(addr, PAGE_SIZE);
+        munmap(addr + PAGE_SIZE * (pages - 1), PAGE_SIZE);
     }
-    void build_physical_pages_map() {
+    void modify_via_physical_memory() {
+        const size_t modify_page_index = 2;
+        const size_t modify_page_offset = 113;
+        const int modify_page_value = 111;
+        assert(modify_page_index < pages);
+        // change memory via direct physical page access
+        cout << "modifying via direct physical memory access /dev/mem" << endl;
         vector<PageMapEntry> entries;
         entries.resize(pages);
-        get_physical_pages(vaddrs, &entries[0], pages);
-//        for(auto& e: entries)
-//            pmap[e.entry]
-    }
+        get_physical_pages(addr, &entries[0], pages);
 
+        void *phys_addr = entries[modify_page_index].ptr();
+        uint8_t *addr2 = (uint8_t*) map_physical_memory(phys_addr, 1);
+        cout << "mapping physical address " << phys_addr << " to virtual " << (void*) addr2 << endl;
+        report_physical_pages(addr2, 1);
+
+        cout << "writing " << modify_page_value << " by virtual " << (void*) (&addr2[modify_page_offset])
+                << " and reading by virtual " << (void*) (&addr[modify_page_index * PAGE_SIZE + modify_page_offset]) << endl;
+        addr2[modify_page_offset] = modify_page_value;
+        int read_value = addr[modify_page_index * PAGE_SIZE + modify_page_offset];
+        cout << "read " << read_value << std::endl;
+        CHECK(read_value == modify_page_value, "Failed to write via /dev/mem");
+    }
     void run() {
         allocate();
+        report_physical_pages(addr, pages);
+        cout << endl;
+        modify_via_physical_memory();
+        cout << endl;
     }
 };
 
 int main() {
-    TestL2<M1> test;
+    MemTest test;
     test.run();
 }
+

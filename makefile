@@ -14,7 +14,7 @@ all:
 
 # compiler setup
 CC=g++
-CFLAGS=-std=c++2a -ggdb $(addprefix -I ,$(libs)) -MMD -fuse-ld=gold -Wl,-no-allow-multiple-definition -Wall -Werror --pedantic -Wextra -lpthread
+CFLAGS=-std=c++2a -ggdb $(addprefix -I ,$(libs)) -MMD -fuse-ld=gold -Wl,-no-allow-multiple-definition -Wall -Werror --pedantic -Wextra -lpthread -DIS_VM=$(IS_VM)
 CFLAGS_DEBUG=-O0 -DDEBUG_MODE=1
 CFLAGS_PROD=-O3
 

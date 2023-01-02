@@ -1,5 +1,6 @@
-// IWYU begin_export
+#pragma once
 
+// IWYU begin_export
 #include <fcntl.h> // IWYU keep
 #include <stddef.h> // IWYU keep
 #include <stdint.h> // IWYU keep
@@ -27,14 +28,21 @@
 #define EMPTY_MAIN int main() { return 0; }
 #define IS_CPP20 (__cplusplus >= 202002L)
 
-#if IS_ARM
+#if INSIDE_IDE
+#define IDE_DEFAULT_TYPE(T,D) D
+#else
+#define IDE_DEFAULT_TYPE(T,D) T
+#endif
+
+// IS_VM - QEMU simulates 64b cache line and 4K Pages on M1
+
+#if IS_ARM && !IS_VM
 #define CACHE_LINE_SIZE 128
 #define PAGE_SIZE 16384
 #else
 #define CACHE_LINE_SIZE 64
 #define PAGE_SIZE 4096
 #endif
-
 
 #define SYS_CALL_CHECK(FAILURE, WHAT) \
     if (FAILURE) { \
@@ -54,3 +62,16 @@
     }
 
 #define CHECK(COND, WHAT) if(!(COND)) FATAL_ERROR("CHECK FAILED {"#COND <<"} " << WHAT)
+
+template<typename T>
+inline T mem_load(const T *ptr) {
+    auto v = *reinterpret_cast<const volatile T*>(ptr);
+    COMPILER_BARRIER;
+    return v;
+}
+template<typename T>
+inline
+void mem_store(T *ptr, T value) {
+    COMPILER_BARRIER;
+    *reinterpret_cast<volatile T*>(ptr) = value;
+}
