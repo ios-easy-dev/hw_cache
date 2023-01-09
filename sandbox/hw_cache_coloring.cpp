@@ -260,7 +260,7 @@ struct TestL2 {
         for (size_t page_set = test_pages - 1; page_set <= test_pages; ++page_set) {
             // page_set 1 maps same page test_pages times
             // performance drops with 9 different pages since 8 pages can fit M1 L1
-            cout << "TEST " << test_pages << " WITH " << page_set << " different PAGES of same color" << endl;
+            cout << "TEST " << test_pages << " pages WITH " << page_set << " different PAGES of same color" << endl;
             for (size_t i = 0; i < test_pages; ++i) {
                 size_t page_idx = getPage(i, page_set);
                 report_page(page_idx);
@@ -281,15 +281,19 @@ struct TestL2 {
         const size_t total_size = M::Page::size * test_pages;
         const size_t stride = M::CacheLine::size;
         const size_t strides = total_size / stride;
-        const size_t loops = 1 << 10;
+        const size_t loops = 1 << 8;
 
         auto run = [&]() {
             for (size_t i = 0; i < loops; ++i) {
+#if 0
+                memset(tailored, i, total_size);
+#else
                 uint8_t *p = tailored;
                 for (size_t j = 0; j < strides; ++j) {
                     *p = i;
                     p += stride;
                 }
+#endif
             }
         };
         auto reset = []() {
